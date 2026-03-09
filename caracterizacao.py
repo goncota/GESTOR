@@ -15,6 +15,8 @@
 #  11. Caracterização por iApp
 #  12. Caracterização por SubCanalNegocioAtual
 #  13. Diversidade de campanhas e produtos elegíveis
+#  14. Elegibilidade por grupos (PA / NPA / NPA+CCR)
+#  15. Análise por AtividadeCredito
 #
 # Execução diária: usa datetime.now() como referência temporal.
 # Requer: df_plano.csv no PATH_PLANO e (opcionalmente) ligação SQL Server.
@@ -38,6 +40,18 @@ ENCODING     = 'utf-8-sig'
 ESCASSEZ_THRESHOLD_CRITICA = 0.80   # Acima disto: campanha CRÍTICA (escassa)
 ESCASSEZ_THRESHOLD_ALTA    = 0.50
 ESCASSEZ_THRESHOLD_MEDIA   = 0.30
+
+# Grupos de campanhas por elegibilidade
+CAMPANHAS_PA = [
+    'iXS_PCD_Auto', 'iXS_PCDPMHabit', 'iXS_PCDPMTOP', 'iXS_PCDPM_Parcerias',
+    'iXS_PCDPM_1T', 'iXS_PCDPM_2T', 'iXS_RUC_1T', 'iXS_RUC_2T',
+    'iXS_PCD_Inativos_1T', 'iXS_PCD_Inativos_2T', 'iXS_Terminados_PA_1T',
+    'iXS_Terminados_PA_2T', 'iXS_PMS_PM', 'iXS_PMS_PA',
+]
+
+CAMPANHAS_NPA = [
+    'iXS_CCR_SMSA', 'iXS_CCR_SMSB', 'iXS_CCR_SMSC', 'iXS_CCR_SMSD', 'iXS_CCR',
+]
 
 # Data de referência
 hoje      = datetime.now()
@@ -769,6 +783,140 @@ def caracterizar_diversidade_campanhas_produtos(df_base, df_plano):
 
 
 
+# =============================================================================
+# SECÇÃO 14 – ELEGIBILIDADE POR GRUPOS (PA / NPA / NPA+CCR)
+# =============================================================================
+def caracterizar_elegibilidade_grupos(df_base):
+    titulo('14. ELEGIBILIDADE POR GRUPOS: PA / NPA / NPA+CCR')
+
+    colunas_xs = [c for c in df_base.columns if c.startswith('iXS_')]
+    if not colunas_xs:
+        print("  ⚠  Sem colunas de elegibilidade (iXS_*) no df_base.\n")
+        return
+    camps_pa  = [c for c in CAMPANHAS_PA  if c in df_base.columns]
+    camps_npa = [c for c in CAMPANHAS_NPA if c in df_base.columns]
+
+    # ---- Grupo PA -----------------------------------------------------------
+    print("  Grupo PA – clientes elegíveis para PA")
+    print(f"  Campanhas PA consideradas : {camps_pa if camps_pa else '(nenhuma encontrada na base)'}")
+    print()
+
+    if camps_pa:
+        eleg_pa = (df_base[camps_pa].sum(axis=1) > 0)
+        n_pa    = int(eleg_pa.sum())
+        print(f"  {'Grupo':<50} {'Elegíveis':>10}  {'%':>8}")
+        print(f"  {'-'*50} {'-'*10}  {'-'*8}")
+        print(f"  {'PA (pelo menos 1 campanha PA elegível)':<50} {n_pa:>10,}  {n_pa/total*100:>7.1f}%")
+        print()
+        print(f"  Detalhe por campanha PA:")
+        print(f"  {'Campanha':<40} {'Elegíveis':>10}  {'%':>8}")
+        print(f"  {'-'*40} {'-'*10}  {'-'*8}")
+        for c in camps_pa:
+            n = int((df_base[c] == 1).sum())
+            print(f"  {c:<40} {n:>10,}  {n/total*100:>7.1f}%")
+        print()
+    else:
+        print("  ⚠  Nenhuma campanha PA encontrada na base de envio.\n")
+
+    # ---- Grupo NPA ----------------------------------------------------------
+    print("  Grupo NPA – clientes elegíveis para NPA")
+    print(f"  Campanhas NPA consideradas: {camps_npa if camps_npa else '(nenhuma encontrada na base)'}")
+    print()
+
+    if camps_npa:
+        eleg_npa = (df_base[camps_npa].sum(axis=1) > 0)
+        n_npa    = int(eleg_npa.sum())
+
+        print(f"  {'Grupo':<50} {'Elegíveis':>10}  {'%':>8}")
+        print(f"  {'-'*50} {'-'*10}  {'-'*8}")
+        print(f"  {'NPA (pelo menos 1 campanha NPA elegível)':<50} {n_npa:>10,}  {n_npa/total*100:>7.1f}%")
+
+        # Sub-grupo: NPA onde ProdutoUltimaCampanha = CCR
+        if 'ProdutoUltimaCampanha' in df_base.columns:
+            mask_ccr = df_base['ProdutoUltimaCampanha'].astype(str).str.upper().str.strip() == 'CCR'
+            n_npa_ccr = int((eleg_npa & mask_ccr).sum())
+            print(f"  {'NPA + ProdutoUltimaCampanha = CCR':<50} {n_npa_ccr:>10,}  {n_npa_ccr/total*100:>7.1f}%")
+        print()
+
+        print(f"  Detalhe por campanha NPA:")
+        print(f"  {'Campanha':<40} {'Elegíveis':>10}  {'%':>8}")
+        print(f"  {'-'*40} {'-'*10}  {'-'*8}")
+        for c in camps_npa:
+            n = int((df_base[c] == 1).sum())
+            print(f"  {c:<40} {n:>10,}  {n/total*100:>7.1f}%")
+        print()
+    else:
+        print("  ⚠  Nenhuma campanha NPA encontrada na base de envio.\n")
+
+
+# =============================================================================
+# SECÇÃO 15 – ANÁLISE POR ATIVIDADE DE CRÉDITO
+# =============================================================================
+def caracterizar_por_atividade_credito(df_base):
+    titulo('15. ANÁLISE POR ATIVIDADE DE CRÉDITO')
+
+    col_ac = next(
+        (c for c in df_base.columns if 'atividadecredito' in c.lower().replace(' ', '').replace('_', '')),
+        None
+    )
+    if col_ac is None:
+        print("  ⚠  Coluna AtividadeCredito não encontrada no df_base.\n")
+        return
+
+    colunas_xs = [c for c in df_base.columns if c.startswith('iXS_')]
+    if not colunas_xs:
+        print("  ⚠  Sem colunas de elegibilidade (iXS_*) no df_base.\n")
+        return
+
+    camps_pa  = [c for c in CAMPANHAS_PA  if c in df_base.columns]
+    camps_npa = [c for c in CAMPANHAS_NPA if c in df_base.columns]
+
+    total = len(df_base)
+
+    # Flags de elegibilidade por grupo
+    df_w = df_base[[col_ac]].copy()
+    df_w['_eleg_pa']  = df_base[camps_pa].sum(axis=1) > 0  if camps_pa  else False
+    df_w['_eleg_npa'] = df_base[camps_npa].sum(axis=1) > 0 if camps_npa else False
+    if 'ProdutoUltimaCampanha' in df_base.columns:
+        mask_ccr = df_base['ProdutoUltimaCampanha'].astype(str).str.upper().str.strip() == 'CCR'
+        df_w['_eleg_npa_ccr'] = df_w['_eleg_npa'] & mask_ccr
+    else:
+        df_w['_eleg_npa_ccr'] = False
+
+    # Agrupamento por AtividadeCredito
+    grp = (
+        df_w.groupby(col_ac, dropna=False)
+        .agg(
+            clientes   =(col_ac,        'count'),
+            eleg_pa    =('_eleg_pa',    'sum'),
+            eleg_npa   =('_eleg_npa',   'sum'),
+            eleg_npa_ccr=('_eleg_npa_ccr', 'sum'),
+        )
+        .sort_values('clientes', ascending=False)
+        .reset_index()
+    )
+
+    print(f"  Total de clientes na base : {total:,}")
+    print()
+    print(
+        f"  {col_ac:<30} {'Clientes':>10}  {'Eleg.PA':>10}  "
+        f"{'Eleg.NPA':>10}  {'Eleg.NPA+CCR':>13}"
+    )
+    print(
+        f"  {'-'*30} {'-'*10}  {'-'*10}  {'-'*10}  {'-'*13}"
+    )
+    for _, row in grp.iterrows():
+        n        = int(row['clientes'])
+        n_pa     = int(row['eleg_pa'])
+        n_npa    = int(row['eleg_npa'])
+        n_npa_ccr= int(row['eleg_npa_ccr'])
+        print(
+            f"  {str(row[col_ac]):<30} {n:>10,}  {n_pa:>10,}  "
+            f"{n_npa:>10,}  {n_npa_ccr:>13,}"
+        )
+    print()
+
+
 def main():
     sep()
     print("  CARACTERIZAÇÃO DO PROJECTO DE CAMPANHAS")
@@ -813,9 +961,11 @@ def main():
         caracterizar_por_iapp(df_base)
         caracterizar_por_subcanal(df_base)
         caracterizar_diversidade_campanhas_produtos(df_base, df_plano)
+        caracterizar_elegibilidade_grupos(df_base)
+        caracterizar_por_atividade_credito(df_base)
     else:
         print("=" * 80)
-        print("  SECÇÕES 4–13 REQUEREM LIGAÇÃO SQL SERVER (#BaseEnvio)")
+        print("  SECÇÕES 4–15 REQUEREM LIGAÇÃO SQL SERVER (#BaseEnvio)")
         print("  Execute o script a partir de uma máquina com acesso a Diomedes.")
         print("=" * 80)
         print()
