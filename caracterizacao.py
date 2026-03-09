@@ -3,11 +3,18 @@
 # =============================================================================
 # Script autónomo que caracteriza:
 #   1. Plano de campanhas a data de hoje
-#   2. Escassez das campanhas (escassas vs não escassas)
+#   2. Escassez das campanhas (apenas campanhas futuras)
 #   3. Base de clientes por Tier de antiguidade
-#   4. Base de clientes por Pressão Comercial (0, 1, 2, 3, >3)
+#   4. Base de clientes por Pressão Comercial (0, 1, 2, 3, 4, 5, 6, >6)
 #   5. Análise cruzada Tier × Pressão Comercial
 #   6. Visão geral do projecto (totais, distribuição temporal, volumetria)
+#   7. Elegibilidade e cobertura
+#   8. Caracterização por Ano de Geração
+#   9. Caracterização por quantidade de campanhas elegíveis
+#  10. Caracterização por Ordem
+#  11. Caracterização por iApp
+#  12. Caracterização por SubCanalNegocioAtual
+#  13. Diversidade de campanhas e produtos elegíveis
 #
 # Execução diária: usa datetime.now() como referência temporal.
 # Requer: df_plano.csv no PATH_PLANO e (opcionalmente) ligação SQL Server.
@@ -85,7 +92,10 @@ def label_pressao(p):
     elif p == 1: return '1 campanha'
     elif p == 2: return '2 campanhas'
     elif p == 3: return '3 campanhas'
-    else:        return '> 3 campanhas'
+    elif p == 4: return '4 campanhas'
+    elif p == 5: return '5 campanhas'
+    elif p == 6: return '6 campanhas'
+    else:        return '> 6 campanhas'
 
 
 def nivel_escassez(e):
@@ -257,8 +267,15 @@ def caracterizar_escassez(df_plano, df_base=None):
         _mostrar_volumetria_plano(df_plano)
         return
 
+    # Considerar apenas campanhas futuras (excluindo passadas e de hoje, que já saíram)
+    df_plano_futuras = df_plano[df_plano['data'].dt.date > hoje.date()].copy()
+
+    if df_plano_futuras.empty:
+        print("  ℹ  Não existem campanhas futuras no plano para calcular escassez.\n")
+        return
+
     resultados = []
-    for _, row in df_plano.iterrows():
+    for _, row in df_plano_futuras.iterrows():
         camp = row['campanha']
         vol  = int(row['volumetria'])
         data = row['data']
@@ -275,9 +292,9 @@ def caracterizar_escassez(df_plano, df_base=None):
             'tipo'      : str(row.get('tipo oferta', '')),
             'volumetria': vol,
             'elegiveis' : elegiveis,
+            'formula'   : f"{vol:,} / max({elegiveis:,}, 1)",
             'escassez'  : escassez,
             'nivel'     : nivel_escassez(escassez),
-            'passada'   : data.date() < hoje.date() if pd.notna(data) else False,
         })
 
     df_esc = pd.DataFrame(resultados)
@@ -289,6 +306,9 @@ def caracterizar_escassez(df_plano, df_base=None):
     escassas     = contagem['CRÍTICO'] + contagem['ALTO']
     nao_escassas = contagem['MÉDIO']   + contagem['BAIXO']
 
+    print(f"  Nota: excluídas campanhas passadas e de hoje (já saíram).")
+    print(f"  Campanhas futuras analisadas : {len(df_plano_futuras)}")
+    print()
     print(f"  Threshold escassez crítica : > {ESCASSEZ_THRESHOLD_CRITICA:.0%}")
     print(f"  Threshold escassez alta    : > {ESCASSEZ_THRESHOLD_ALTA:.0%}")
     print()
@@ -300,17 +320,19 @@ def caracterizar_escassez(df_plano, df_base=None):
     print(f"    • BAIXO    (≤ {ESCASSEZ_THRESHOLD_MEDIA:.0%})              : {contagem['BAIXO']:>4}")
     print()
 
-    # Tabela detalhada ordenada por escassez
+    # Tabela detalhada ordenada por escassez (com fórmula ilustrativa)
     df_detalhe = df_esc.sort_values('escassez', ascending=False)
-    print(f"  {'Campanha':<35} {'Data':<12} {'Tipo':<20} {'Vol':>8}  {'Elegiveis':>10}  {'Escassez':>9}  Nível")
-    print(f"  {'-'*35} {'-'*12} {'-'*20} {'-'*8}  {'-'*10}  {'-'*9}  {'-'*8}")
+    print(f"  {'Campanha':<35} {'Data':<12} {'Tipo':<20} {'Vol':>8}  {'Elegiveis':>10}  {'Fórmula (Vol/Eleg)':<22}  {'Escassez':>9}  Nível")
+    print(f"  {'-'*35} {'-'*12} {'-'*20} {'-'*8}  {'-'*10}  {'-'*22}  {'-'*9}  {'-'*8}")
     for _, r in df_detalhe.iterrows():
         data_str = r['data'].strftime('%Y-%m-%d') if pd.notna(r['data']) else 'N/D'
         print(
             f"  {r['campanha']:<35} {data_str:<12} {r['tipo']:<20} "
-            f"{r['volumetria']:>8,}  {r['elegiveis']:>10,}  {r['escassez']:>9.2f}  {r['nivel']}"
+            f"{r['volumetria']:>8,}  {r['elegiveis']:>10,}  {r['formula']:<22}  {r['escassez']:>9.2f}  {r['nivel']}"
         )
     print()
+
+    return df_esc
 
 
 def _mostrar_volumetria_plano(df_plano):
@@ -364,8 +386,8 @@ def caracterizar_clientes_por_pressao(df_base):
     df['pressao_num'] = pd.to_numeric(df['PressaoComercial'], errors='coerce').fillna(0).astype(int)
     df['pressao_grp'] = df['pressao_num'].apply(label_pressao)
 
-    # Ordenação lógica (consistente com label_pressao)
-    ordem = [label_pressao(p) for p in [0, 1, 2, 3, 4]]
+    # Ordenação lógica: 0, 1, 2, 3, 4, 5, 6, > 6
+    ordem = [label_pressao(p) for p in [0, 1, 2, 3, 4, 5, 6]] + ['> 6 campanhas']
 
     total = len(df)
     print(f"  Total de clientes na base : {total:,}")
@@ -399,11 +421,11 @@ def caracterizar_cruzada_tier_pressao(df_base):
     )
     df['pressao_num'] = pd.to_numeric(df['PressaoComercial'], errors='coerce').fillna(0).astype(int)
     df['pressao_grp'] = df['pressao_num'].apply(
-        lambda p: '>3' if p > 3 else str(p)   # chaves compactas para pivot
+        lambda p: '>6' if p > 6 else str(p)   # chaves compactas para pivot
     )
 
     # Tabela cruzada
-    cols_pressao = ['0', '1', '2', '3', '>3']
+    cols_pressao = ['0', '1', '2', '3', '4', '5', '6', '>6']
     tiers        = [1, 2, 3, 4]
 
     tabela = pd.crosstab(df['tier'], df['pressao_grp'])
@@ -416,27 +438,27 @@ def caracterizar_cruzada_tier_pressao(df_base):
 
     total_geral = tabela['TOTAL'].sum()
 
-    header_pressao = '  '.join(f'{c:>10}' for c in cols_pressao)
+    header_pressao = '  '.join(f'{c:>8}' for c in cols_pressao)
     print(f"  {'Tier':<40} {header_pressao}  {'TOTAL':>10}")
-    print(f"  {'-'*40} {'  '.join(['-'*10]*5)}  {'-'*10}")
+    print(f"  {'-'*40} {'  '.join(['-'*8]*8)}  {'-'*10}")
 
     for t in tiers:
         if t not in tabela.index:
             continue
-        row_vals = '  '.join(f"{int(tabela.loc[t, c]):>10,}" for c in cols_pressao)
+        row_vals = '  '.join(f"{int(tabela.loc[t, c]):>8,}" for c in cols_pressao)
         total_t  = int(tabela.loc[t, 'TOTAL'])
         pct_t    = total_t / total_geral * 100 if total_geral else 0
         print(f"  {label_tier(t):<40} {row_vals}  {total_t:>10,}  ({pct_t:.1f}%)")
 
     sep('-')
-    total_vals = '  '.join(f"{int(tabela[c].sum()):>10,}" for c in cols_pressao)
+    total_vals = '  '.join(f"{int(tabela[c].sum()):>8,}" for c in cols_pressao)
     print(f"  {'TOTAL':<40} {total_vals}  {int(total_geral):>10,}")
     print()
 
-    # Clientes com pressão máxima (>3) por tier
-    alta_pressao = df[df['pressao_num'] > 3]
+    # Clientes com pressão máxima (>6) por tier
+    alta_pressao = df[df['pressao_num'] > 6]
     if not alta_pressao.empty:
-        print("  Clientes com pressão > 3 campanhas, por Tier:")
+        print("  Clientes com pressão > 6 campanhas, por Tier:")
         for t in tiers:
             n = int((alta_pressao['tier'] == t).sum())
             if n > 0:
@@ -492,8 +514,261 @@ def caracterizar_elegibilidade(df_plano, df_base):
 
 
 # =============================================================================
-# PONTO DE ENTRADA PRINCIPAL
+# SECÇÃO 8 – CARACTERIZAÇÃO POR ANO DE GERAÇÃO
 # =============================================================================
+def caracterizar_por_ano_geracao(df_base):
+    titulo('8. CARACTERIZAÇÃO DA BASE DE CLIENTES POR ANO DE GERAÇÃO')
+
+    if 'AnoGeracao' not in df_base.columns:
+        print("  ⚠  Coluna AnoGeracao não encontrada no df_baseenvio.\n")
+        return
+
+    total = len(df_base)
+    dist = (
+        df_base.groupby('AnoGeracao', dropna=False)
+        .size().rename('clientes')
+        .sort_index()
+        .reset_index()
+    )
+    dist['%'] = dist['clientes'] / total * 100
+
+    print(f"  Total de clientes na base : {total:,}")
+    print()
+    print(f"  {'Ano Geração':<15} {'Clientes':>10}  {'%':>8}")
+    print(f"  {'-'*15} {'-'*10}  {'-'*8}")
+    for _, row in dist.iterrows():
+        print(f"  {str(row['AnoGeracao']):<15} {int(row['clientes']):>10,}  {row['%']:>7.1f}%")
+    print()
+
+
+# =============================================================================
+# SECÇÃO 9 – CARACTERIZAÇÃO POR QUANTIDADE DE CAMPANHAS ELEGÍVEIS
+# =============================================================================
+def caracterizar_por_qtd_elegiveis(df_base):
+    titulo('9. CARACTERIZAÇÃO DA BASE DE CLIENTES POR QTD. DE CAMPANHAS ELEGÍVEIS')
+
+    colunas_xs = [c for c in df_base.columns if c.startswith('iXS_')]
+    if not colunas_xs:
+        print("  ⚠  Sem colunas de elegibilidade (iXS_*) no df_baseenvio.\n")
+        return
+
+    total = len(df_base)
+    qtd_elegiveis = df_base[colunas_xs].sum(axis=1).astype(int)
+
+    dist = qtd_elegiveis.value_counts().sort_index().reset_index()
+    dist.columns = ['qtd_campanhas', 'clientes']
+    dist['%'] = dist['clientes'] / total * 100
+
+    print(f"  Total de clientes na base : {total:,}")
+    print(f"  Campanhas iXS_ consideradas: {len(colunas_xs)}")
+    print()
+    print(f"  {'Nº Campanhas Elegíveis':>25} {'Clientes':>10}  {'%':>8}")
+    print(f"  {'-'*25} {'-'*10}  {'-'*8}")
+    for _, row in dist.iterrows():
+        print(f"  {int(row['qtd_campanhas']):>25} {int(row['clientes']):>10,}  {row['%']:>7.1f}%")
+    print()
+
+
+# =============================================================================
+# SECÇÃO 10 – CARACTERIZAÇÃO POR ORDEM
+# =============================================================================
+def caracterizar_por_ordem(df_base):
+    titulo('10. CARACTERIZAÇÃO DA BASE DE CLIENTES POR ORDEM')
+
+    if 'Ordem' not in df_base.columns:
+        print("  ⚠  Coluna Ordem não encontrada no df_baseenvio.\n")
+        return
+
+    total = len(df_base)
+    dist = (
+        df_base.groupby('Ordem', dropna=False)
+        .size().rename('clientes')
+        .sort_index()
+        .reset_index()
+    )
+    dist['%'] = dist['clientes'] / total * 100
+
+    print(f"  Total de clientes na base : {total:,}")
+    print()
+    print(f"  {'Ordem':<10} {'Clientes':>10}  {'%':>8}")
+    print(f"  {'-'*10} {'-'*10}  {'-'*8}")
+    for _, row in dist.iterrows():
+        print(f"  {str(row['Ordem']):<10} {int(row['clientes']):>10,}  {row['%']:>7.1f}%")
+    print()
+
+
+# =============================================================================
+# SECÇÃO 11 – CARACTERIZAÇÃO POR iAPP
+# =============================================================================
+def caracterizar_por_iapp(df_base):
+    titulo('11. CARACTERIZAÇÃO DA BASE DE CLIENTES POR iApp')
+
+    if 'iApp' not in df_base.columns:
+        print("  ⚠  Coluna iApp não encontrada no df_baseenvio.\n")
+        return
+
+    total = len(df_base)
+    com_app    = int((df_base['iApp'] == 1).sum())
+    sem_app    = total - com_app
+
+    print(f"  Total de clientes na base : {total:,}")
+    print()
+    print(f"  {'iApp':<20} {'Clientes':>10}  {'%':>8}")
+    print(f"  {'-'*20} {'-'*10}  {'-'*8}")
+    print(f"  {'Com iApp (1)':<20} {com_app:>10,}  {com_app/total*100:>7.1f}%")
+    print(f"  {'Sem iApp (0)':<20} {sem_app:>10,}  {sem_app/total*100:>7.1f}%")
+    print()
+
+
+# =============================================================================
+# SECÇÃO 12 – CARACTERIZAÇÃO POR SUBCANALNEGOCIONEGOCIOATUAL
+# =============================================================================
+def caracterizar_por_subcanal(df_base):
+    titulo('12. CARACTERIZAÇÃO DA BASE DE CLIENTES POR SubCanalNegocioAtual')
+
+    col = next(
+        (c for c in df_base.columns if 'subcanal' in c.lower()),
+        None
+    )
+
+    if col is None:
+        print("  ⚠  Coluna SubCanalNegocioAtual não encontrada no df_baseenvio.\n")
+        return
+
+    total = len(df_base)
+    dist = (
+        df_base.groupby(col, dropna=False)
+        .size().rename('clientes')
+        .sort_values(ascending=False)
+        .reset_index()
+    )
+    dist['%'] = dist['clientes'] / total * 100
+
+    print(f"  Total de clientes na base : {total:,}")
+    print()
+    print(f"  {'SubCanalNegocioAtual':<35} {'Clientes':>10}  {'%':>8}")
+    print(f"  {'-'*35} {'-'*10}  {'-'*8}")
+    for _, row in dist.iterrows():
+        print(f"  {str(row[col]):<35} {int(row['clientes']):>10,}  {row['%']:>7.1f}%")
+    print()
+
+
+# =============================================================================
+# SECÇÃO 13 – DIVERSIDADE DE CAMPANHAS E PRODUTOS
+# =============================================================================
+def caracterizar_diversidade_campanhas_produtos(df_base, df_plano):
+    titulo('13. DIVERSIDADE DE CAMPANHAS E PRODUTOS ELEGÍVEIS')
+
+    colunas_xs = [c for c in df_base.columns if c.startswith('iXS_')]
+    if not colunas_xs:
+        print("  ⚠  Sem colunas de elegibilidade (iXS_*) no df_baseenvio.\n")
+        return
+
+    # --- Mapeamento campanha → produto (via df_plano 'tipo oferta') ---
+    mapa_produto = {}
+    for _, row in df_plano.iterrows():
+        camp = row['campanha']
+        prod = str(row.get('tipo oferta', '')).strip()
+        # Normalizar: "RUC Plafond Minimo" (e variantes) → "RUC"
+        if 'ruc' in prod.lower() and 'plafond' in prod.lower():
+            prod = 'RUC'
+        mapa_produto[camp] = prod
+
+    # Campanhas elegíveis presentes na base que têm mapeamento no plano
+    camps_com_produto = [c for c in colunas_xs if c in mapa_produto]
+
+    total = len(df_base)
+
+    # ---- Distribuição por TipoUltimaCampanha --------------------------------
+    if 'TipoUltimaCampanha' in df_base.columns:
+        print("  a) Clientes que podem receber uma campanha DIFERENTE do TipoUltimaCampanha:")
+        print()
+
+        df_w = df_base.copy()
+        # Para cada cliente, obter o conjunto de campanhas elegíveis (iXS_ = 1)
+        df_w['_camps_elegiveis'] = df_w[colunas_xs].apply(
+            lambda row: set(c for c in colunas_xs if row[c] == 1), axis=1
+        )
+
+        def tem_diferente_tipo(row):
+            tipo_ult = row['TipoUltimaCampanha']
+            if tipo_ult in ('Sem Campanha', None, '', 'nan'):
+                # Nunca recebeu – qualquer campanha elegível é "diferente"
+                return len(row['_camps_elegiveis']) > 0
+            return any(c != tipo_ult for c in row['_camps_elegiveis'])
+
+        com_diferente_tipo = int(df_w.apply(tem_diferente_tipo, axis=1).sum())
+        sem_diferente_tipo = total - com_diferente_tipo
+        print(f"    Com pelo menos 1 campanha diferente do TipoUltimaCampanha : {com_diferente_tipo:>10,}  ({com_diferente_tipo/total*100:.1f}%)")
+        print(f"    Sem campanha diferente (apenas o mesmo tipo ou nenhuma)   : {sem_diferente_tipo:>10,}  ({sem_diferente_tipo/total*100:.1f}%)")
+        print()
+
+    # ---- Distribuição por ProdutoUltimaCampanha -----------------------------
+    if 'ProdutoUltimaCampanha' in df_base.columns:
+        print("  b) Clientes que podem receber um PRODUTO diferente do ProdutoUltimaCampanha:")
+        print()
+
+        df_w2 = df_base.copy()
+        df_w2['_produtos_elegiveis'] = df_w2[camps_com_produto].apply(
+            lambda row: set(
+                mapa_produto[c] for c in camps_com_produto if row[c] == 1
+            ),
+            axis=1
+        )
+
+        def tem_diferente_produto(row):
+            prod_ult = str(row['ProdutoUltimaCampanha']).strip() if pd.notna(row['ProdutoUltimaCampanha']) else ''
+            # Normalizar "RUC Plafond Minimo" para "RUC" também no histórico
+            if 'ruc' in prod_ult.lower() and 'plafond' in prod_ult.lower():
+                prod_ult = 'RUC'
+            prods = row['_produtos_elegiveis']
+            if not prod_ult or prod_ult in ('Sem Campanha', 'nan', 'None'):
+                return len(prods) > 0
+            return any(p != prod_ult for p in prods)
+
+        com_diferente_prod = int(df_w2.apply(tem_diferente_produto, axis=1).sum())
+        sem_diferente_prod = total - com_diferente_prod
+        print(f"    Com pelo menos 1 produto diferente do ProdutoUltimaCampanha : {com_diferente_prod:>10,}  ({com_diferente_prod/total*100:.1f}%)")
+        print(f"    Sem produto diferente (apenas o mesmo produto ou nenhum)    : {sem_diferente_prod:>10,}  ({sem_diferente_prod/total*100:.1f}%)")
+        print()
+
+    # ---- Breakdown por número de produtos distintos elegíveis ---------------
+    print("  c) Distribuição por número de produtos distintos elegíveis:")
+    print()
+
+    if not camps_com_produto:
+        print("    ⚠  Nenhuma campanha com produto mapeado no plano encontrada.\n")
+        return
+
+    produtos_distintos_no_plano = sorted(set(mapa_produto[c] for c in camps_com_produto))
+    n_max = len(produtos_distintos_no_plano)
+
+    print(f"    Produtos distintos no plano (normalizados) : {produtos_distintos_no_plano}")
+    print()
+
+    df_w3 = df_base.copy()
+    df_w3['_n_produtos'] = df_w3[camps_com_produto].apply(
+        lambda row: len(set(mapa_produto[c] for c in camps_com_produto if row[c] == 1)),
+        axis=1
+    )
+
+    rows_prod = []
+    print(f"  {'Nº Produtos Distintos':<40} {'Clientes':>10}  {'%':>8}")
+    print(f"  {'-'*40} {'-'*10}  {'-'*8}")
+    for n in range(0, n_max + 1):
+        cnt = int((df_w3['_n_produtos'] == n).sum())
+        pct = cnt / total * 100 if total else 0
+        if n == 0:
+            label = '0 produtos (nenhuma campanha elegível)'
+        elif n == n_max:
+            label = f'{n} produto(s) – todos os produtos'
+        else:
+            label = f'{n} produto(s)'
+        print(f"  {label:<40} {cnt:>10,}  {pct:>7.1f}%")
+    print()
+
+
+
 def main():
     sep()
     print("  CARACTERIZAÇÃO DO PROJECTO DE CAMPANHAS")
@@ -532,9 +807,15 @@ def main():
         caracterizar_clientes_por_pressao(df_base)
         caracterizar_cruzada_tier_pressao(df_base)
         caracterizar_elegibilidade(df_plano, df_base)
+        caracterizar_por_ano_geracao(df_base)
+        caracterizar_por_qtd_elegiveis(df_base)
+        caracterizar_por_ordem(df_base)
+        caracterizar_por_iapp(df_base)
+        caracterizar_por_subcanal(df_base)
+        caracterizar_diversidade_campanhas_produtos(df_base, df_plano)
     else:
         print("=" * 80)
-        print("  SECÇÕES 4–7 REQUEREM LIGAÇÃO SQL SERVER (#BaseEnvio)")
+        print("  SECÇÕES 4–13 REQUEREM LIGAÇÃO SQL SERVER (#BaseEnvio)")
         print("  Execute o script a partir de uma máquina com acesso a Diomedes.")
         print("=" * 80)
         print()
