@@ -50,6 +50,12 @@ CAMPANHAS_PA = [
 ]
 
 CAMPANHAS_NPA = [
+    'iXS_RUC_NPA_1T', 'iXS_RUC_NPA_2T', 'iXS_PCD_NPA_1T', 'iXS_PCD_NPA_2T',
+    'iXS_Terminados_NPA_1T', 'iXS_Terminados_NPA_2T',
+    'iXS_RUC_NPA_CPay', 'iXS_PCD_NPA_CPay', 'iXS_RUC_PlafondMinimo',
+]
+
+CAMPANHAS_CCR = [
     'iXS_CCR_SMSA', 'iXS_CCR_SMSB', 'iXS_CCR_SMSC', 'iXS_CCR_SMSD', 'iXS_CCR',
 ]
 
@@ -784,10 +790,10 @@ def caracterizar_diversidade_campanhas_produtos(df_base, df_plano):
 
 
 # =============================================================================
-# SECÇÃO 14 – ELEGIBILIDADE POR GRUPOS (PA / NPA / NPA+CCR)
+# SECÇÃO 14 – ELEGIBILIDADE POR GRUPOS (PA / NPA / CCR)
 # =============================================================================
 def caracterizar_elegibilidade_grupos(df_base):
-    titulo('14. ELEGIBILIDADE POR GRUPOS: PA / NPA / NPA+CCR')
+    titulo('14. ELEGIBILIDADE POR GRUPOS: PA / NPA / CCR')
 
     colunas_xs = [c for c in df_base.columns if c.startswith('iXS_')]
     if not colunas_xs:
@@ -795,6 +801,7 @@ def caracterizar_elegibilidade_grupos(df_base):
         return
     camps_pa  = [c for c in CAMPANHAS_PA  if c in df_base.columns]
     camps_npa = [c for c in CAMPANHAS_NPA if c in df_base.columns]
+    camps_ccr = [c for c in CAMPANHAS_CCR if c in df_base.columns]
 
     # ---- Grupo PA -----------------------------------------------------------
     print("  Grupo PA – clientes elegíveis para PA")
@@ -830,12 +837,6 @@ def caracterizar_elegibilidade_grupos(df_base):
         print(f"  {'Grupo':<50} {'Elegíveis':>10}  {'%':>8}")
         print(f"  {'-'*50} {'-'*10}  {'-'*8}")
         print(f"  {'NPA (pelo menos 1 campanha NPA elegível)':<50} {n_npa:>10,}  {n_npa/total*100:>7.1f}%")
-
-        # Sub-grupo: NPA onde ProdutoUltimaCampanha = CCR
-        if 'ProdutoUltimaCampanha' in df_base.columns:
-            mask_ccr = df_base['ProdutoUltimaCampanha'].astype(str).str.upper().str.strip() == 'CCR'
-            n_npa_ccr = int((eleg_npa & mask_ccr).sum())
-            print(f"  {'NPA + ProdutoUltimaCampanha = CCR':<50} {n_npa_ccr:>10,}  {n_npa_ccr/total*100:>7.1f}%")
         print()
 
         print(f"  Detalhe por campanha NPA:")
@@ -847,6 +848,30 @@ def caracterizar_elegibilidade_grupos(df_base):
         print()
     else:
         print("  ⚠  Nenhuma campanha NPA encontrada na base de envio.\n")
+
+    # ---- Grupo CCR ----------------------------------------------------------
+    print("  Grupo CCR – clientes elegíveis para CCR")
+    print(f"  Campanhas CCR consideradas: {camps_ccr if camps_ccr else '(nenhuma encontrada na base)'}")
+    print()
+
+    if camps_ccr:
+        eleg_ccr = (df_base[camps_ccr].sum(axis=1) > 0)
+        n_ccr    = int(eleg_ccr.sum())
+
+        print(f"  {'Grupo':<50} {'Elegíveis':>10}  {'%':>8}")
+        print(f"  {'-'*50} {'-'*10}  {'-'*8}")
+        print(f"  {'CCR (pelo menos 1 campanha CCR elegível)':<50} {n_ccr:>10,}  {n_ccr/total*100:>7.1f}%")
+        print()
+
+        print(f"  Detalhe por campanha CCR:")
+        print(f"  {'Campanha':<40} {'Elegíveis':>10}  {'%':>8}")
+        print(f"  {'-'*40} {'-'*10}  {'-'*8}")
+        for c in camps_ccr:
+            n = int((df_base[c] == 1).sum())
+            print(f"  {c:<40} {n:>10,}  {n/total*100:>7.1f}%")
+        print()
+    else:
+        print("  ⚠  Nenhuma campanha CCR encontrada na base de envio.\n")
 
 
 # =============================================================================
@@ -870,6 +895,7 @@ def caracterizar_por_atividade_credito(df_base):
 
     camps_pa  = [c for c in CAMPANHAS_PA  if c in df_base.columns]
     camps_npa = [c for c in CAMPANHAS_NPA if c in df_base.columns]
+    camps_ccr = [c for c in CAMPANHAS_CCR if c in df_base.columns]
 
     total = len(df_base)
 
@@ -877,20 +903,16 @@ def caracterizar_por_atividade_credito(df_base):
     df_w = df_base[[col_ac]].copy()
     df_w['_eleg_pa']  = df_base[camps_pa].sum(axis=1) > 0  if camps_pa  else False
     df_w['_eleg_npa'] = df_base[camps_npa].sum(axis=1) > 0 if camps_npa else False
-    if 'ProdutoUltimaCampanha' in df_base.columns:
-        mask_ccr = df_base['ProdutoUltimaCampanha'].astype(str).str.upper().str.strip() == 'CCR'
-        df_w['_eleg_npa_ccr'] = df_w['_eleg_npa'] & mask_ccr
-    else:
-        df_w['_eleg_npa_ccr'] = False
+    df_w['_eleg_ccr'] = df_base[camps_ccr].sum(axis=1) > 0 if camps_ccr else False
 
     # Agrupamento por AtividadeCredito
     grp = (
         df_w.groupby(col_ac, dropna=False)
         .agg(
-            clientes   =(col_ac,        'count'),
-            eleg_pa    =('_eleg_pa',    'sum'),
-            eleg_npa   =('_eleg_npa',   'sum'),
-            eleg_npa_ccr=('_eleg_npa_ccr', 'sum'),
+            clientes =(col_ac,       'count'),
+            eleg_pa  =('_eleg_pa',   'sum'),
+            eleg_npa =('_eleg_npa',  'sum'),
+            eleg_ccr =('_eleg_ccr',  'sum'),
         )
         .sort_values('clientes', ascending=False)
         .reset_index()
@@ -900,19 +922,19 @@ def caracterizar_por_atividade_credito(df_base):
     print()
     print(
         f"  {col_ac:<30} {'Clientes':>10}  {'Eleg.PA':>10}  "
-        f"{'Eleg.NPA':>10}  {'Eleg.NPA+CCR':>13}"
+        f"{'Eleg.NPA':>10}  {'Eleg.CCR':>10}"
     )
     print(
-        f"  {'-'*30} {'-'*10}  {'-'*10}  {'-'*10}  {'-'*13}"
+        f"  {'-'*30} {'-'*10}  {'-'*10}  {'-'*10}  {'-'*10}"
     )
     for _, row in grp.iterrows():
         n        = int(row['clientes'])
         n_pa     = int(row['eleg_pa'])
         n_npa    = int(row['eleg_npa'])
-        n_npa_ccr= int(row['eleg_npa_ccr'])
+        n_ccr    = int(row['eleg_ccr'])
         print(
             f"  {str(row[col_ac]):<30} {n:>10,}  {n_pa:>10,}  "
-            f"{n_npa:>10,}  {n_npa_ccr:>13,}"
+            f"{n_npa:>10,}  {n_ccr:>10,}"
         )
     print()
 
